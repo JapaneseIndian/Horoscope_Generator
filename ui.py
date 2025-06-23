@@ -31,11 +31,21 @@ def main():
                 )
                 
                 if response.status_code == 200:
-                    data = response.json()
-                    
-                    st.success("✨ Here's your horoscope reading:")
-                    st.subheader(f"{sign} - {category.capitalize()}")
-                    st.write(data["prediction"])
+                    if response.status_code == 200:
+                        data = response.json()
+                        st.success("✨ Here's your horoscope reading:")
+                        st.subheader(f"{sign} - {category.capitalize()}")
+                        
+                        if isinstance(data["prediction"], str):
+                             st.write(data["prediction"])
+                        elif isinstance(data["prediction"], dict):
+                             prediction_text = data["prediction"].get('text', 
+                                                data["prediction"].get('content', 
+                                                str(data["prediction"])))
+                             st.write(prediction_text)
+                        else:
+                            st.error("Invalid prediction format received")
+                            st.json(data) 
                     
                     col1, col2 = st.columns(2)
                     with col1:
@@ -93,7 +103,7 @@ def main():
                             if st.button(f"Delete #{pred['id']}", key=f"delete_{pred['id']}"):
                                 del_response = requests.delete(f"{URL}/horoscope/delete/{pred['id']}")
                                 if del_response.status_code == 200:
-                                    st.rerun()  # Refresh the list
+                                    st.rerun()  
                                 else:
                                     st.error("Failed to delete prediction")
             else:
