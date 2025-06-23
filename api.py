@@ -4,10 +4,98 @@ import random as r
 from flask_cors import CORS
 import json
 import os
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.schema import HumanMessage, SystemMessage
+from langchain_community.vectorstores import FAISS
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from langchain.prompts import ChatPromptTemplate
+import google.generativeai as genai
 
 app = Flask(__name__)
 CORS(app)
 DATA_FILE = "horoscope_data.json"
+
+api ="AIzaSyDAlVQY4QGKPPl6O6FvOdux_3czuxdFuB8"  
+
+llm = ChatGoogleGenerativeAI(
+    model="gemini-1.5-flash-latest",
+    temperature=0.7,
+    google_api_key=api 
+)
+
+embed = GoogleGenerativeAIEmbeddings(
+    model="models/embedding-001",
+    google_api_key=api
+)
+
+vector_path_store="horo_vectors"
+if not os.path.exists(vector_path_store):
+    astro_knowledge = [
+        "Aries (March 21-April 19) are known for their fiery energy and leadership qualities.",
+        "Taurus (April 20-May 20) values stability and sensual pleasures.",
+        "Gemini (May 21-June 20) are communicative and adaptable air signs.",
+        "Cancer (June 21-July 22) are nurturing water signs deeply connected to emotions.",
+        "Leo (July 23-August 22) are confident fire signs that crave attention.",
+        "Virgo (August 23-September 22) are analytical earth signs focused on details.",
+        "Libra (September 23-October 22) seek balance and harmony in relationships.",
+        "Scorpio (October 23-November 21) are intense water signs with transformative energy.",
+        "Sagittarius (November 22-December 21) are adventurous fire signs seeking truth.",
+        "Capricorn (December 22-January 19) are disciplined earth signs focused on goals.",
+        "Aquarius (January 20-February 18) are innovative air signs with humanitarian ideals.",
+        "Pisces (February 19-March 20) are compassionate water signs with strong intuition.",
+        "Mercury retrograde periods often cause communication challenges for all signs.",
+        "Venus governs love and beauty, influencing relationships when it transits signs.",
+        "Mars energizes action and passion, affecting motivation in different zodiac signs."
+    ]
+    vector_store=FAISS.from_texts(astro_knowledge,embedding=embed)
+    vector_store.save_local(vector_path_store)
+else:
+    vector_store=FAISS.load_local(vector_path_store,embed,allow_dangerous_deserialization=True)
+
+RAG_PROMPT = ChatPromptTemplate.from_messages([
+    SystemMessage(content="""You are a mystical astrologer. Generate horoscopes by combining:
+    - The user's zodiac sign characteristics
+    - Current astrological transits and aspects
+    - General astrological knowledge
+    - The specific category requested
+    
+    Make it 3-4 sentences, poetic but not vague. Include astrological terminology where appropriate."""),
+    ("human", """Context information:
+    {context}
+
+    Generate a {category} horoscope for {sign} today ({current_date}).
+    Tone: {tone}""")
+])
+
+def format_docs(docs):
+    """Properly format retrieved documents for context"""
+    if not docs:
+        return "No astrological context available"
+    try:
+        if hasattr(docs[0], 'page_content'):  
+            return "\n\n".join(doc.page_content for doc in docs)
+        elif isinstance(docs[0], str): 
+            return "\n\n".join(docs)
+        else:  
+            return str(docs)
+    except Exception as e:
+        print(f"Error formatting docs: {e}")
+        return "Astrological context currently unavailable"
+
+retriever=vector_store.as_retriever(search_kwargs={"k":3})
+ragchain=(
+    {"context": retriever | format_docs, 
+     "sign": RunnablePassthrough(),
+     "category": RunnablePassthrough(),
+     "current_date": RunnablePassthrough(),
+     "tone": RunnablePassthrough()}
+    | RAG_PROMPT
+    | llm
+    | StrOutputParser()
+)
+
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r') as f:
@@ -18,32 +106,57 @@ def save_data(data):
     with open(DATA_FILE, 'w') as f:
         json.dump(data, f, indent=2)
 
-# Zodiac data
 zodiac = ["Aries","Taurus","Gemini","Cancer","Scorpio","Leo","Pisces","Libra","Virgo","Aquarius","Sagittarius","Capricorn"]
 
-predictions = {
-    "love": ["Venus aligns with your heart today", "An old flame may reappear","An unexpected compliment will make your day special","Your charm is at peak levels - someone's noticing your magnetic energy"],
-    "career": ["Mercury brings good opportunities", "Avoid important decisions today","A bold move at work will pay off unexpectedly","Your creative ideas will impress superiors this week"],
-    "health": ["Listen to your body's needs", "A walk in nature will help","Listen to your body's subtle signals - they're trying to tell you something","Hydration will be your secret weapon this week"],
-    "social life":["An old friend will reappear with exciting news","Your natural charisma will shine at gatherings","Your social circle is about to expand in delightful ways","Group activities will bring unexpected joy this weekend"],
-    "mind":["Meditation will reveal solutions to lingering problems","A book or podcast will spark an important epiphany","Journaling will help process complex emotions"]
-}
-@app.route('/horoscope', methods=['GET']) 
-def horoscope():
-    sign = request.args.get('sign')
-    category = request.args.get('category', 'career')
-    prediction = r.choice(predictions[category])
+def generate(sign: str, category: str) -> str:
+    """Generate a horoscope using RAG with Gemini"""
+    try:
+        formatted_prompt = RAG_PROMPT.format(
+            context=format_docs(retriever.invoke(sign)),
+            sign=sign,
+            category=category,
+            current_date=datetime.now().strftime("%Y-%m-%d"),
+            tone="mystical, soothing and magical"
+        )
+        response = llm.invoke(formatted_prompt)
+        
+        if hasattr(response, 'content'):
+            return response.content
+        elif isinstance(response, dict):
+            return response.get('text', str(response))
+        return str(response)
+        
+    except Exception as e:
+        error_msg = f"The stars are not aligned properly today. (Error: {str(e)})"
+        print(f"Generation Error: {error_msg}")
+        return error_msg
 
-    if not sign or sign not in zodiac:
-        return jsonify({"error": "Invalid zodiac sign"}), 400
+@app.route('/horoscope', methods=['GET'])
+def horoscope():
+    sign = request.args.get('sign', '').capitalize()
+    category = request.args.get('category', 'career').lower()
     
-    return jsonify({
-        "sign": sign,
-        "category": category,
-        "prediction": prediction,
-        "date": datetime.now().strftime("%Y-%m-%d"),
-        "lucky_number": r.randint(1, 100)
-    })
+    if not sign or sign not in zodiac:
+        return jsonify({
+            "error": "Please provide a valid zodiac sign",
+            "valid_signs": zodiac
+        }), 400
+    
+    try:
+        prediction = generate(sign, category)
+        return jsonify({
+            "sign": sign,
+            "category": category,
+            "prediction": prediction,
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "lucky_number": r.randint(1, 100)
+        })
+    except Exception as e:
+        return jsonify({
+            "error": "Our celestial connection failed",
+            "details": str(e)
+        }), 500
+
 @app.route('/horoscope/save', methods=['POST'])
 def save_horoscope():
     data = request.get_json()
