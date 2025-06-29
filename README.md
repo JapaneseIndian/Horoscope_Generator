@@ -11,13 +11,13 @@ This project is a Horoscope Generator API that provides daily horoscopes for all
 * User-Friendly Interface: Clean and intuitive Streamlit web interface
 
 ## Technologies Used
-* Backend: Flask (Python web framework)
+* Backend: Flask (Python web framework), Langchain libraries and RAG
 
 * Frontend: Streamlit (for interactive web interface)
 
 * Database: SQLite (for storing saved horoscopes)
 
-* Horoscope Data: Aztro API (or custom horoscope generation)
+* Horoscope Data: Gemini API (or custom horoscope generation)
 
 ## Installation
 * Prerequisites
